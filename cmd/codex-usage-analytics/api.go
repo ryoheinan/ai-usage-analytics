@@ -11,24 +11,59 @@ import (
 
 func registerAPI(mux *http.ServeMux, db *store.DB) {
 	mux.HandleFunc("GET /api/summary", func(w http.ResponseWriter, r *http.Request) {
-		days := intParam(r, "days", 30)
-		summary, err := db.Summary(r.Context(), time.Now().UTC().AddDate(0, 0, -days))
+		since, err := sinceParam(r, db, 30)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		summary, err := db.Summary(r.Context(), since)
 		writeJSON(w, summary, err)
 	})
 	mux.HandleFunc("GET /api/series", func(w http.ResponseWriter, r *http.Request) {
-		days := intParam(r, "days", 30)
-		series, err := db.Series(r.Context(), time.Now().UTC().AddDate(0, 0, -days))
+		since, err := seriesSinceParam(r, db, 7)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		series, err := db.Series(r.Context(), since)
 		writeJSON(w, series, err)
 	})
 	mux.HandleFunc("GET /api/breakdown/models", func(w http.ResponseWriter, r *http.Request) {
-		days := intParam(r, "days", 30)
-		rows, err := db.ModelBreakdown(r.Context(), time.Now().UTC().AddDate(0, 0, -days))
+		since, err := sinceParam(r, db, 30)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		rows, err := db.ModelBreakdown(r.Context(), since)
 		writeJSON(w, rows, err)
 	})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		health, err := db.IngestionHealth(r.Context())
 		writeJSON(w, health, err)
 	})
+}
+
+func sinceParam(r *http.Request, db *store.DB, fallbackDays int) (time.Time, error) {
+	if r.URL.Query().Get("range") == "all" {
+		first, err := db.FirstEventAt(r.Context())
+		if err != nil {
+			return time.Time{}, err
+		}
+		if first == nil {
+			return startOfUTCDay(time.Now().UTC()), nil
+		}
+		return *first, nil
+	}
+	days := intParam(r, "days", fallbackDays)
+	return time.Now().UTC().AddDate(0, 0, -days), nil
+}
+
+func seriesSinceParam(r *http.Request, db *store.DB, fallbackDays int) (time.Time, error) {
+	if r.URL.Query().Get("range") == "all" {
+		return sinceParam(r, db, fallbackDays)
+	}
+	days := intParam(r, "days", fallbackDays)
+	return startOfUTCDay(time.Now().UTC()).AddDate(0, 0, -(days - 1)), nil
 }
 
 func intParam(r *http.Request, key string, fallback int) int {
@@ -41,6 +76,11 @@ func intParam(r *http.Request, key string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func startOfUTCDay(t time.Time) time.Time {
+	year, month, day := t.UTC().Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func writeJSON(w http.ResponseWriter, value any, err error) {
