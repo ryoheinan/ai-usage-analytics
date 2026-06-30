@@ -8,6 +8,7 @@ services:
     environment:
       CUA_ADDR: ":4318"
       CUA_DB: "/data/codex-usage.sqlite"
+      CUA_DEBUG_OTEL_KEYS: "${CUA_DEBUG_OTEL_KEYS:-}"
 
 volumes:
   codex-usage-data:
