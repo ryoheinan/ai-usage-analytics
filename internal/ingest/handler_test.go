@@ -3,6 +3,7 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -70,6 +71,75 @@ func TestHandleLogsStoresMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestHandleLogsReadsNestedCodexTokenUsage(t *testing.T) {
+	mem := &memoryStore{}
+	handler := NewHandler(mem, pricing.Catalog{
+		"gpt-test": {InputPerMTok: 1, CachedInputPerMTok: 0.1, OutputPerMTok: 5},
+	})
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	body, err := proto.Marshal(nestedCodexUsageRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	if len(mem.events) != 1 {
+		t.Fatalf("stored events = %d, want 1", len(mem.events))
+	}
+	event := mem.events[0]
+	if event.Name != "codex.sse_event" {
+		t.Fatalf("Name = %q", event.Name)
+	}
+	if event.InputTokens != 1200 || event.CachedInputTokens != 300 || event.OutputTokens != 150 || event.ReasoningOutputTokens != 40 || event.TotalTokens != 1350 {
+		t.Fatalf("unexpected nested usage: %+v", event)
+	}
+}
+
+func TestHandleLogsReadsJSONStringBodyAndStringNumbers(t *testing.T) {
+	mem := &memoryStore{}
+	handler := NewHandler(mem, pricing.Catalog{
+		"gpt-test": {InputPerMTok: 1, CachedInputPerMTok: 0.1, OutputPerMTok: 5},
+	})
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	body, err := proto.Marshal(jsonStringBodyRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	if len(mem.events) != 1 {
+		t.Fatalf("stored events = %d, want 1", len(mem.events))
+	}
+	event := mem.events[0]
+	if event.Name != "codex.sse_event" || event.Kind != "response.completed" {
+		t.Fatalf("unexpected event identity: %+v", event)
+	}
+	if event.Success == nil || !*event.Success {
+		t.Fatalf("Success = %v, want true", event.Success)
+	}
+	if event.InputTokens != 2000 || event.CachedInputTokens != 500 || event.OutputTokens != 300 || event.TotalTokens != 2300 {
+		t.Fatalf("unexpected string body usage: %+v", event)
+	}
+}
+
 func sampleRequest() *collogspb.ExportLogsServiceRequest {
 	return &collogspb.ExportLogsServiceRequest{
 		ResourceLogs: []*logspb.ResourceLogs{{
@@ -92,6 +162,89 @@ func sampleRequest() *collogspb.ExportLogsServiceRequest {
 						kvi("total_tokens", 1080),
 						kv("prompt", "do not store this"),
 					},
+				}},
+			}},
+		}},
+	}
+}
+
+func jsonStringBodyRequest() *collogspb.ExportLogsServiceRequest {
+	body := map[string]any{
+		"type": "codex.sse_event",
+		"payload": map[string]any{
+			"kind":        "response.completed",
+			"status_code": "200",
+			"usage": map[string]any{
+				"input_tokens":        "2000",
+				"cached_input_tokens": "500",
+				"output_tokens":       "300",
+				"total_tokens":        "2300",
+			},
+		},
+	}
+	encoded, _ := json.Marshal(body)
+	return &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: &resourcepb.Resource{
+				Attributes: []*commonpb.KeyValue{
+					kv("model", "gpt-test"),
+				},
+			},
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					TimeUnixNano: uint64(time.Date(2026, 6, 30, 1, 2, 3, 0, time.UTC).UnixNano()),
+					Body: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{
+						StringValue: string(encoded),
+					}},
+				}},
+			}},
+		}},
+	}
+}
+
+func nestedCodexUsageRequest() *collogspb.ExportLogsServiceRequest {
+	return &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: &resourcepb.Resource{
+				Attributes: []*commonpb.KeyValue{
+					kv("model", "gpt-test"),
+				},
+			},
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					TimeUnixNano: uint64(time.Date(2026, 6, 30, 1, 2, 3, 0, time.UTC).UnixNano()),
+					Body: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{
+						Values: []*commonpb.KeyValue{
+							kv("type", "codex.sse_event"),
+							{
+								Key: "payload",
+								Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{
+									Values: []*commonpb.KeyValue{
+										kv("kind", "response.completed"),
+										{
+											Key: "info",
+											Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{
+												Values: []*commonpb.KeyValue{
+													{
+														Key: "total_token_usage",
+														Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{
+															Values: []*commonpb.KeyValue{
+																kvi("input_tokens", 1200),
+																kvi("cached_input_tokens", 300),
+																kvi("output_tokens", 150),
+																kvi("reasoning_output_tokens", 40),
+																kvi("total_tokens", 1350),
+															},
+														}}},
+													},
+												},
+											}}},
+										},
+									},
+								}}},
+							},
+						},
+					}}},
 				}},
 			}},
 		}},

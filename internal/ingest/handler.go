@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,18 +103,57 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 			}
 		}
 	}
+	flat := flatten(merged)
 
-	name := firstString(merged, "event.name", "name", "codex.event_name", "type")
-	model := firstString(merged, "model", "codex.model", "gen_ai.request.model", "gen_ai.response.model")
-	conversationID := firstString(merged, "conversation.id", "conversation_id", "codex.conversation_id", "thread.id", "thread_id")
-	kind := firstString(merged, "event.kind", "kind", "sse.event", "sse_event")
-	success, hasSuccess := firstBool(merged, "success", "codex.success", "http.response.status_code")
-	duration := firstInt(merged, "duration_ms", "codex.duration_ms", "durationMilliseconds")
-	input := firstInt64(merged, "input_tokens", "usage.input_tokens", "codex.usage.input_tokens", "gen_ai.usage.input_tokens")
-	cached := firstInt64(merged, "cached_input_tokens", "usage.cached_input_tokens", "codex.usage.cached_input_tokens")
-	output := firstInt64(merged, "output_tokens", "usage.output_tokens", "codex.usage.output_tokens", "gen_ai.usage.output_tokens")
-	reasoning := firstInt64(merged, "reasoning_output_tokens", "usage.reasoning_output_tokens", "codex.usage.reasoning_output_tokens")
-	total := firstInt64(merged, "total_tokens", "usage.total_tokens", "codex.usage.total_tokens", "gen_ai.usage.total_tokens")
+	name := firstString(flat, "event.name", "name", "codex.event_name", "type", "payload.type")
+	model := firstString(flat, "model", "codex.model", "gen_ai.request.model", "gen_ai.response.model", "payload.model")
+	conversationID := firstString(flat, "conversation.id", "conversation_id", "codex.conversation_id", "thread.id", "thread_id", "payload.conversation_id", "payload.thread_id")
+	kind := firstString(flat, "event.kind", "kind", "sse.event", "sse_event", "payload.kind")
+	success, hasSuccess := firstBool(flat, "success", "codex.success", "http.status_code", "http.response.status_code", "status_code", "payload.success", "payload.status_code", "payload.http.status_code")
+	duration := firstInt(flat, "duration_ms", "codex.duration_ms", "durationMilliseconds", "payload.duration_ms", "payload.durationMilliseconds")
+	input := firstInt64(flat,
+		"input_tokens",
+		"usage.input_tokens",
+		"codex.usage.input_tokens",
+		"gen_ai.usage.input_tokens",
+		"payload.usage.input_tokens",
+		"payload.info.last_token_usage.input_tokens",
+		"payload.info.total_token_usage.input_tokens",
+	)
+	cached := firstInt64(flat,
+		"cached_input_tokens",
+		"usage.cached_input_tokens",
+		"codex.usage.cached_input_tokens",
+		"payload.usage.cached_input_tokens",
+		"payload.info.last_token_usage.cached_input_tokens",
+		"payload.info.total_token_usage.cached_input_tokens",
+	)
+	output := firstInt64(flat,
+		"output_tokens",
+		"usage.output_tokens",
+		"codex.usage.output_tokens",
+		"gen_ai.usage.output_tokens",
+		"payload.usage.output_tokens",
+		"payload.info.last_token_usage.output_tokens",
+		"payload.info.total_token_usage.output_tokens",
+	)
+	reasoning := firstInt64(flat,
+		"reasoning_output_tokens",
+		"usage.reasoning_output_tokens",
+		"codex.usage.reasoning_output_tokens",
+		"payload.usage.reasoning_output_tokens",
+		"payload.info.last_token_usage.reasoning_output_tokens",
+		"payload.info.total_token_usage.reasoning_output_tokens",
+	)
+	total := firstInt64(flat,
+		"total_tokens",
+		"usage.total_tokens",
+		"codex.usage.total_tokens",
+		"gen_ai.usage.total_tokens",
+		"payload.usage.total_tokens",
+		"payload.info.last_token_usage.total_tokens",
+		"payload.info.total_token_usage.total_tokens",
+	)
 	if total == 0 {
 		total = input + output
 	}
@@ -141,8 +181,31 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 		ReasoningOutputTokens: reasoning,
 		TotalTokens:           total,
 		EstimatedCostUSD:      h.prices.EstimateUSD(model, input, cached, output),
-		DroppedContentFields:  countContentFields(merged),
+		DroppedContentFields:  countContentFields(flat),
 	}
+}
+
+func flatten(values map[string]any) map[string]any {
+	out := make(map[string]any)
+	var walk func(prefix string, value any)
+	walk = func(prefix string, value any) {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				childKey := key
+				if prefix != "" {
+					childKey = prefix + "." + key
+				}
+				walk(childKey, child)
+			}
+		default:
+			out[prefix] = value
+		}
+	}
+	for key, value := range values {
+		walk(key, value)
+	}
+	return out
 }
 
 func attrs(kvs []*commonpb.KeyValue) map[string]any {
@@ -154,11 +217,16 @@ func attrs(kvs []*commonpb.KeyValue) map[string]any {
 }
 
 func anyMap(v *commonpb.AnyValue) map[string]any {
-	value, ok := value(v).(map[string]any)
-	if !ok {
-		return nil
+	switch value := value(v).(type) {
+	case map[string]any:
+		return value
+	case string:
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+			return decoded
+		}
 	}
-	return value
+	return nil
 }
 
 func value(v *commonpb.AnyValue) any {
@@ -221,6 +289,19 @@ func firstBool(values map[string]any, keys ...string) (bool, bool) {
 			if strings.Contains(key, "status_code") {
 				return value >= 200 && value < 400, true
 			}
+		case float64:
+			if strings.Contains(key, "status_code") {
+				return value >= 200 && value < 400, true
+			}
+		case string:
+			if parsed, err := strconv.ParseBool(value); err == nil {
+				return parsed, true
+			}
+			if strings.Contains(key, "status_code") {
+				if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+					return parsed >= 200 && parsed < 400, true
+				}
+			}
 		}
 	}
 	return false, false
@@ -239,6 +320,13 @@ func firstInt64(values map[string]any, keys ...string) int64 {
 			return int64(value)
 		case float64:
 			return int64(value)
+		case string:
+			if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+				return parsed
+			}
+			if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+				return int64(parsed)
+			}
 		}
 	}
 	return 0
