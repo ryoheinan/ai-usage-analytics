@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Usage Analytics</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="topbar">
+        <div>
+          <h1>Codex Usage Analytics</h1>
+          <p>Local OTel telemetry only. Costs are estimates, not billing data.</p>
+        </div>
+        <button id="refresh" type="button">Refresh</button>
+      </header>
+
+      <section class="grid metrics" aria-label="usage summary">
+        <article><span>Estimated cost</span><strong id="cost">$0.0000</strong></article>
+        <article><span>Total tokens</span><strong id="tokens">0</strong></article>
+        <article><span>Requests</span><strong id="requests">0</strong></article>
+        <article><span>Failures</span><strong id="failures">0</strong></article>
+      </section>
+
+      <section class="grid detail">
+        <article class="panel">
+          <h2>Tokens by Day</h2>
+          <div id="chart" class="chart"></div>
+        </article>
+        <article class="panel">
+          <h2>Model Breakdown</h2>
+          <table>
+            <thead>
+              <tr><th>Model</th><th>Tokens</th><th>Cost</th></tr>
+            </thead>
+            <tbody id="models"></tbody>
+          </table>
+        </article>
+      </section>
+
+      <section class="grid metrics secondary" aria-label="token details">
+        <article><span>Input</span><strong id="input">0</strong></article>
+        <article><span>Cached input</span><strong id="cached">0</strong></article>
+        <article><span>Output</span><strong id="output">0</strong></article>
+        <article><span>Reasoning</span><strong id="reasoning">0</strong></article>
+      </section>
+
+      <section class="panel health">
+        <h2>Ingestion Health</h2>
+        <dl>
+          <div><dt>Last event</dt><dd id="lastEvent">Never</dd></div>
+          <div><dt>Accepted events</dt><dd id="accepted">0</dd></div>
+          <div><dt>Dropped content fields</dt><dd id="dropped">0</dd></div>
+        </dl>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
