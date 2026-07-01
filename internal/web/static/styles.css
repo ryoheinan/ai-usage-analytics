@@ -145,13 +145,18 @@ article,
 
 .chart {
   display: grid;
-  grid-auto-columns: 38px;
-  grid-auto-flow: column;
-  grid-template-columns: none;
+  grid-template-columns: repeat(auto-fit, minmax(34px, 1fr));
   align-items: stretch;
   gap: 8px;
   height: 210px;
   padding-top: 8px;
+  overflow: hidden;
+}
+
+.chart.chart-scroll {
+  grid-auto-columns: 38px;
+  grid-auto-flow: column;
+  grid-template-columns: none;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-inline: contain;

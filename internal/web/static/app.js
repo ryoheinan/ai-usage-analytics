@@ -28,6 +28,7 @@ function setRangeLabels(label) {
 function renderChart(series) {
   const root = document.getElementById("chart");
   root.innerHTML = "";
+  root.classList.toggle("chart-scroll", series.length > 14);
   const max = Math.max(1, ...series.map((p) => p.totalTokens));
   for (const point of series) {
     const item = document.createElement("div");
