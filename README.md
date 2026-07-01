@@ -20,6 +20,12 @@ docker compose up -d --build
 
 Then open `http://localhost:4318`.
 
+### Local Dockerfile
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
+```
+
 ## Configure Codex CLI
 
 Add an OTel exporter to your Codex config:
