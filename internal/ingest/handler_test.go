@@ -10,8 +10,10 @@ import (
 	"time"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
 
@@ -57,6 +59,9 @@ func TestHandleLogsStoresMetadataOnly(t *testing.T) {
 	if event.Name != "codex.sse_event" {
 		t.Fatalf("Name = %q", event.Name)
 	}
+	if event.Source != "codex" {
+		t.Fatalf("Source = %q", event.Source)
+	}
 	if event.Model != "gpt-test" {
 		t.Fatalf("Model = %q", event.Model)
 	}
@@ -68,6 +73,77 @@ func TestHandleLogsStoresMetadataOnly(t *testing.T) {
 	}
 	if event.EstimatedCostUSD <= 0 {
 		t.Fatalf("EstimatedCostUSD = %v, want positive", event.EstimatedCostUSD)
+	}
+}
+
+func TestHandleLogsReadsClaudeCodeAPIRequest(t *testing.T) {
+	mem := &memoryStore{}
+	handler := NewHandler(mem, pricing.DefaultCatalog())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	body, err := proto.Marshal(claudeCodeLogRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/logs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	if len(mem.events) != 1 {
+		t.Fatalf("stored events = %d, want 1", len(mem.events))
+	}
+	event := mem.events[0]
+	if event.Source != "claude-code" || event.Name != "claude_code.api_request" {
+		t.Fatalf("unexpected Claude identity: %+v", event)
+	}
+	if event.Model != "claude-sonnet-test" {
+		t.Fatalf("Model = %q", event.Model)
+	}
+	if event.InputTokens != 1000 || event.CachedInputTokens != 200 || event.CacheCreationTokens != 300 || event.OutputTokens != 400 || event.TotalTokens != 1900 {
+		t.Fatalf("unexpected Claude usage: %+v", event)
+	}
+	if event.EstimatedCostUSD != 0.0123 {
+		t.Fatalf("EstimatedCostUSD = %v, want telemetry cost", event.EstimatedCostUSD)
+	}
+}
+
+func TestHandleMetricsReadsClaudeCodeUsage(t *testing.T) {
+	mem := &memoryStore{}
+	handler := NewHandler(mem, pricing.DefaultCatalog())
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	body, err := proto.Marshal(claudeCodeMetricsRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/metrics", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	if len(mem.events) != 1 {
+		t.Fatalf("stored events = %d, want 1", len(mem.events))
+	}
+	event := mem.events[0]
+	if event.Source != "claude-code" || event.Name != "claude_code.usage" || event.Kind != "metric" {
+		t.Fatalf("unexpected metric identity: %+v", event)
+	}
+	if event.InputTokens != 1000 || event.CachedInputTokens != 200 || event.CacheCreationTokens != 300 || event.OutputTokens != 400 || event.TotalTokens != 1900 {
+		t.Fatalf("unexpected metric usage: %+v", event)
+	}
+	if event.EstimatedCostUSD != 0.0123 {
+		t.Fatalf("EstimatedCostUSD = %v, want metric cost", event.EstimatedCostUSD)
 	}
 }
 
@@ -330,6 +406,72 @@ func tokenCountFieldRequest() *collogspb.ExportLogsServiceRequest {
 	}
 }
 
+func claudeCodeLogRequest() *collogspb.ExportLogsServiceRequest {
+	return &collogspb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: &resourcepb.Resource{
+				Attributes: []*commonpb.KeyValue{
+					kv("service.name", "claude-code"),
+					kv("session.id", "session_123"),
+				},
+			},
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					TimeUnixNano: uint64(time.Date(2026, 7, 5, 1, 2, 3, 0, time.UTC).UnixNano()),
+					Attributes: []*commonpb.KeyValue{
+						kv("event.name", "api_request"),
+						kv("model", "claude-sonnet-test"),
+						kvf("cost_usd", 0.0123),
+						kvi("input_tokens", 1000),
+						kvi("cache_read_tokens", 200),
+						kvi("cache_creation_tokens", 300),
+						kvi("output_tokens", 400),
+					},
+				}},
+			}},
+		}},
+	}
+}
+
+func claudeCodeMetricsRequest() *colmetricspb.ExportMetricsServiceRequest {
+	ts := uint64(time.Date(2026, 7, 5, 1, 2, 3, 0, time.UTC).UnixNano())
+	attrs := []*commonpb.KeyValue{
+		kv("model", "claude-sonnet-test"),
+		kv("session.id", "session_123"),
+	}
+	return &colmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			Resource: &resourcepb.Resource{
+				Attributes: []*commonpb.KeyValue{
+					kv("service.name", "claude-code"),
+				},
+			},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Metrics: []*metricspb.Metric{
+					sumMetric("claude_code.token.usage", append(attrs, kv("type", "input")), ts, 1000),
+					sumMetric("claude_code.token.usage", append(attrs, kv("type", "cacheRead")), ts, 200),
+					sumMetric("claude_code.token.usage", append(attrs, kv("type", "cacheCreation")), ts, 300),
+					sumMetric("claude_code.token.usage", append(attrs, kv("type", "output")), ts, 400),
+					sumMetric("claude_code.cost.usage", attrs, ts, 0.0123),
+				},
+			}},
+		}},
+	}
+}
+
+func sumMetric(name string, attrs []*commonpb.KeyValue, ts uint64, value float64) *metricspb.Metric {
+	return &metricspb.Metric{
+		Name: name,
+		Data: &metricspb.Metric_Sum{Sum: &metricspb.Sum{
+			DataPoints: []*metricspb.NumberDataPoint{{
+				TimeUnixNano: ts,
+				Attributes:   attrs,
+				Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: value},
+			}},
+		}},
+	}
+}
+
 func nestedCodexUsageRequest() *collogspb.ExportLogsServiceRequest {
 	return &collogspb.ExportLogsServiceRequest{
 		ResourceLogs: []*logspb.ResourceLogs{{
@@ -393,6 +535,15 @@ func kvi(key string, value int64) *commonpb.KeyValue {
 		Key: key,
 		Value: &commonpb.AnyValue{
 			Value: &commonpb.AnyValue_IntValue{IntValue: value},
+		},
+	}
+}
+
+func kvf(key string, value float64) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key: key,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_DoubleValue{DoubleValue: value},
 		},
 	}
 }

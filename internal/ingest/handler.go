@@ -14,13 +14,20 @@ import (
 	"time"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ryoheinan/ai-usage-analytics/internal/pricing"
 	"github.com/ryoheinan/ai-usage-analytics/internal/store"
+)
+
+const (
+	sourceCodex      = "codex"
+	sourceClaudeCode = "claude-code"
 )
 
 type Handler struct {
@@ -41,6 +48,7 @@ func NewHandler(db interface {
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/logs", h.handleLogs)
+	mux.HandleFunc("POST /v1/metrics", h.handleMetrics)
 }
 
 func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +74,36 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request) {
 	events := h.normalize(&req)
 	if err := h.store.InsertEvents(r.Context(), events); err != nil {
 		http.Error(w, fmt.Sprintf("store events: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]int{"accepted": len(events)})
+}
+
+func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.maxBody))
+	if err != nil {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	var req colmetricspb.ExportMetricsServiceRequest
+	contentType := r.Header.Get("Content-Type")
+	if strings.Contains(contentType, "json") {
+		err = protojson.Unmarshal(body, &req)
+	} else {
+		err = proto.Unmarshal(body, &req)
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("decode otlp metrics: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	events := h.normalizeMetrics(&req)
+	if err := h.store.InsertEvents(r.Context(), events); err != nil {
+		http.Error(w, fmt.Sprintf("store metric events: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -109,6 +147,10 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 	flat := flatten(merged)
 
 	name := firstString(flat, "event.name", "name", "codex.event_name", "type", "payload.type")
+	source := detectSource(flat, name)
+	if source == sourceClaudeCode && strings.HasPrefix(name, "api_") {
+		name = "claude_code." + name
+	}
 	model := firstString(flat, "payload.model", "model", "codex.model", "gen_ai.request.model", "gen_ai.response.model")
 	conversationID := firstString(flat, "conversation.id", "conversation_id", "codex.conversation_id", "thread.id", "thread_id", "payload.conversation_id", "payload.thread_id")
 	kind := firstString(flat, "event.kind", "kind", "sse.event", "sse_event", "payload.kind")
@@ -139,9 +181,11 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 	)
 	cached := firstInt64(flat,
 		"cached_input_tokens",
+		"cache_read_tokens",
 		"cached_token_count",
 		"cachedInputTokens",
 		"usage.cached_input_tokens",
+		"usage.cache_read_tokens",
 		"usage.cached_token_count",
 		"usage.cachedInputTokens",
 		"codex.usage.cached_input_tokens",
@@ -156,6 +200,14 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 		"payload.info.total_token_usage.cached_input_tokens",
 		"payload.info.total_token_usage.cached_token_count",
 		"payload.info.total_token_usage.cachedInputTokens",
+	)
+	cacheCreation := firstInt64(flat,
+		"cache_creation_tokens",
+		"cache_creation_input_tokens",
+		"usage.cache_creation_tokens",
+		"usage.cache_creation_input_tokens",
+		"payload.usage.cache_creation_tokens",
+		"payload.usage.cache_creation_input_tokens",
 	)
 	output := firstInt64(flat,
 		"output_tokens",
@@ -225,6 +277,9 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 	)
 	if total == 0 {
 		total = input + output
+		if source == sourceClaudeCode {
+			total += cached + cacheCreation
+		}
 	}
 	logDiagnosticFields(name, kind, flat, input, cached, output, reasoning, total)
 
@@ -239,6 +294,7 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 
 	return store.Event{
 		Timestamp:             timestamp(record),
+		Source:                source,
 		ConversationID:        conversationID,
 		Model:                 model,
 		Name:                  name,
@@ -247,12 +303,165 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 		DurationMS:            durationPtr,
 		InputTokens:           input,
 		CachedInputTokens:     cached,
+		CacheCreationTokens:   cacheCreation,
 		OutputTokens:          output,
 		ReasoningOutputTokens: reasoning,
 		TotalTokens:           total,
-		EstimatedCostUSD:      h.prices.EstimateUSD(model, input, cached, output),
+		EstimatedCostUSD:      estimatedCost(flat, h.prices, model, input, cached, output),
 		DroppedContentFields:  countContentFields(flat),
 	}
+}
+
+type metricKey struct {
+	model          string
+	conversationID string
+	timestamp      int64
+}
+
+type metricEvent struct {
+	event store.Event
+}
+
+func (h *Handler) normalizeMetrics(req *colmetricspb.ExportMetricsServiceRequest) []store.Event {
+	eventsByKey := make(map[metricKey]*metricEvent)
+	for _, resourceMetrics := range req.ResourceMetrics {
+		resourceAttrs := attrs(resourceMetrics.GetResource().GetAttributes())
+		for _, scopeMetrics := range resourceMetrics.ScopeMetrics {
+			for _, metric := range scopeMetrics.Metrics {
+				if metric.GetName() != "claude_code.token.usage" && metric.GetName() != "claude_code.cost.usage" {
+					continue
+				}
+				for _, point := range metricPoints(metric) {
+					pointAttrs := attrs(point.GetAttributes())
+					flat := flatten(mergeAttrs(resourceAttrs, pointAttrs))
+					source := detectSource(flat, metric.GetName())
+					if source != sourceClaudeCode {
+						source = sourceClaudeCode
+					}
+					model := firstString(flat, "model", "gen_ai.request.model")
+					ts := metricTimestamp(point)
+					key := metricKey{
+						model:          model,
+						conversationID: firstString(flat, "session.id", "conversation.id", "conversation_id"),
+						timestamp:      ts.UnixNano(),
+					}
+					item := eventsByKey[key]
+					if item == nil {
+						item = &metricEvent{event: store.Event{
+							Timestamp:      ts,
+							Source:         source,
+							ConversationID: key.conversationID,
+							Model:          model,
+							Name:           "claude_code.usage",
+							Kind:           "metric",
+						}}
+						eventsByKey[key] = item
+					}
+					value := metricValue(point)
+					switch metric.GetName() {
+					case "claude_code.cost.usage":
+						item.event.EstimatedCostUSD += value
+					case "claude_code.token.usage":
+						switch firstString(flat, "type") {
+						case "input":
+							item.event.InputTokens += int64(value)
+						case "output":
+							item.event.OutputTokens += int64(value)
+						case "cacheRead":
+							item.event.CachedInputTokens += int64(value)
+						case "cacheCreation":
+							item.event.CacheCreationTokens += int64(value)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	events := make([]store.Event, 0, len(eventsByKey))
+	for _, item := range eventsByKey {
+		item.event.TotalTokens = item.event.InputTokens + item.event.CachedInputTokens + item.event.CacheCreationTokens + item.event.OutputTokens
+		events = append(events, item.event)
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].Timestamp.Equal(events[j].Timestamp) {
+			return events[i].Model < events[j].Model
+		}
+		return events[i].Timestamp.Before(events[j].Timestamp)
+	})
+	return events
+}
+
+func mergeAttrs(first, second map[string]any) map[string]any {
+	merged := make(map[string]any, len(first)+len(second))
+	for key, value := range first {
+		merged[key] = value
+	}
+	for key, value := range second {
+		merged[key] = value
+	}
+	return merged
+}
+
+func metricPoints(metric *metricspb.Metric) []*metricspb.NumberDataPoint {
+	if sum := metric.GetSum(); sum != nil {
+		return sum.GetDataPoints()
+	}
+	if gauge := metric.GetGauge(); gauge != nil {
+		return gauge.GetDataPoints()
+	}
+	return nil
+}
+
+func metricTimestamp(point *metricspb.NumberDataPoint) time.Time {
+	if point.GetTimeUnixNano() > 0 {
+		return time.Unix(0, int64(point.GetTimeUnixNano())).UTC()
+	}
+	return time.Now().UTC()
+}
+
+func metricValue(point *metricspb.NumberDataPoint) float64 {
+	switch value := point.GetValue().(type) {
+	case *metricspb.NumberDataPoint_AsDouble:
+		return value.AsDouble
+	case *metricspb.NumberDataPoint_AsInt:
+		return float64(value.AsInt)
+	default:
+		return 0
+	}
+}
+
+func detectSource(values map[string]any, name string) string {
+	for _, key := range []string{"source", "ai.source", "tool.source"} {
+		if value, ok := values[key].(string); ok {
+			switch strings.ToLower(value) {
+			case sourceCodex:
+				return sourceCodex
+			case sourceClaudeCode, "claude", "claude_code":
+				return sourceClaudeCode
+			}
+		}
+	}
+	service := strings.ToLower(firstString(values, "service.name", "service_name", "telemetry.sdk.name"))
+	switch {
+	case strings.Contains(service, "claude"):
+		return sourceClaudeCode
+	case strings.Contains(service, "codex"):
+		return sourceCodex
+	case strings.HasPrefix(name, "claude_code."):
+		return sourceClaudeCode
+	case strings.HasPrefix(name, "codex."):
+		return sourceCodex
+	default:
+		return sourceCodex
+	}
+}
+
+func estimatedCost(values map[string]any, prices pricing.Catalog, model string, input, cached, output int64) float64 {
+	if cost := firstFloat64(values, "cost_usd", "estimated_cost_usd", "usage.cost_usd", "payload.cost_usd", "payload.usage.cost_usd"); cost > 0 {
+		return cost
+	}
+	return prices.EstimateUSD(model, input, cached, output)
 }
 
 func flatten(values map[string]any) map[string]any {
@@ -430,6 +639,24 @@ func firstInt64(values map[string]any, keys ...string) int64 {
 			}
 			if parsed, err := strconv.ParseFloat(value, 64); err == nil {
 				return int64(parsed)
+			}
+		}
+	}
+	return 0
+}
+
+func firstFloat64(values map[string]any, keys ...string) float64 {
+	for _, key := range keys {
+		switch value := values[key].(type) {
+		case int64:
+			return float64(value)
+		case int:
+			return float64(value)
+		case float64:
+			return value
+		case string:
+			if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+				return parsed
 			}
 		}
 	}
