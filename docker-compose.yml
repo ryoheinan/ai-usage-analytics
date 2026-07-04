@@ -1,14 +1,14 @@
 services:
-  codex-usage-analytics:
+  ai-tool-analytics:
     build: .
     ports:
       - "4318:4318"
     volumes:
-      - codex-usage-data:/data
+      - ai-tool-analytics-data:/data
     environment:
       CUA_ADDR: ":4318"
-      CUA_DB: "/data/codex-usage.sqlite"
+      CUA_DB: "/data/ai-tool-analytics.sqlite"
       CUA_DEBUG_OTEL_KEYS: "${CUA_DEBUG_OTEL_KEYS:-}"
 
 volumes:
-  codex-usage-data:
+  ai-tool-analytics-data:

@@ -21,7 +21,7 @@ func TestAPIEmptyCollectionsEncodeAsArrays(t *testing.T) {
 	mux := http.NewServeMux()
 	registerAPI(mux, db)
 
-	for _, path := range []string{"/api/breakdown/models"} {
+	for _, path := range []string{"/api/breakdown/models", "/api/breakdown/sources"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		res := httptest.NewRecorder()
 		mux.ServeHTTP(res, req)
@@ -133,5 +133,53 @@ func TestAPIAllRangeIncludesOlderEvents(t *testing.T) {
 	}
 	if len(models) != 1 || models[0].TotalTokens != 150 {
 		t.Fatalf("/api/breakdown/models?range=all = %+v, want old event included", models)
+	}
+}
+
+func TestAPISourceParamFiltersSummary(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/test.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	success := true
+	if err := db.InsertEvents(context.Background(), []store.Event{
+		{
+			Timestamp:   now,
+			Source:      "codex",
+			Model:       "gpt-test",
+			Name:        "codex.api_request",
+			Success:     &success,
+			TotalTokens: 100,
+		},
+		{
+			Timestamp:   now,
+			Source:      "claude-code",
+			Model:       "claude-test",
+			Name:        "claude_code.api_request",
+			Success:     &success,
+			TotalTokens: 200,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	registerAPI(mux, db)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/summary?range=all&source=claude-code", nil)
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("/api/summary status = %d body = %s", res.Code, res.Body.String())
+	}
+	var summary store.Summary
+	if err := json.Unmarshal(res.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("/api/summary returned invalid JSON: %v body = %s", err, res.Body.String())
+	}
+	if summary.Requests != 1 || summary.TotalTokens != 200 {
+		t.Fatalf("filtered summary = %+v, want Claude row only", summary)
 	}
 }

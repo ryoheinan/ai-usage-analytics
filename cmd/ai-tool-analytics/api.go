@@ -11,30 +11,43 @@ import (
 
 func registerAPI(mux *http.ServeMux, db *store.DB) {
 	mux.HandleFunc("GET /api/summary", func(w http.ResponseWriter, r *http.Request) {
-		since, err := sinceParam(r, db, 30)
+		source := sourceParam(r)
+		since, err := sinceParam(r, db, 30, source)
 		if err != nil {
 			writeJSON(w, nil, err)
 			return
 		}
-		summary, err := db.Summary(r.Context(), since)
+		summary, err := db.SummaryBySource(r.Context(), since, source)
 		writeJSON(w, summary, err)
 	})
 	mux.HandleFunc("GET /api/series", func(w http.ResponseWriter, r *http.Request) {
-		since, err := seriesSinceParam(r, db, 7)
+		source := sourceParam(r)
+		since, err := seriesSinceParam(r, db, 7, source)
 		if err != nil {
 			writeJSON(w, nil, err)
 			return
 		}
-		series, err := db.Series(r.Context(), since)
+		series, err := db.SeriesBySource(r.Context(), since, source)
 		writeJSON(w, series, err)
 	})
 	mux.HandleFunc("GET /api/breakdown/models", func(w http.ResponseWriter, r *http.Request) {
-		since, err := sinceParam(r, db, 30)
+		source := sourceParam(r)
+		since, err := sinceParam(r, db, 30, source)
 		if err != nil {
 			writeJSON(w, nil, err)
 			return
 		}
-		rows, err := db.ModelBreakdown(r.Context(), since)
+		rows, err := db.ModelBreakdownBySource(r.Context(), since, source)
+		writeJSON(w, rows, err)
+	})
+	mux.HandleFunc("GET /api/breakdown/sources", func(w http.ResponseWriter, r *http.Request) {
+		source := sourceParam(r)
+		since, err := sinceParam(r, db, 30, source)
+		if err != nil {
+			writeJSON(w, nil, err)
+			return
+		}
+		rows, err := db.SourceBreakdownBySource(r.Context(), since, source)
 		writeJSON(w, rows, err)
 	})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -43,9 +56,9 @@ func registerAPI(mux *http.ServeMux, db *store.DB) {
 	})
 }
 
-func sinceParam(r *http.Request, db *store.DB, fallbackDays int) (time.Time, error) {
+func sinceParam(r *http.Request, db *store.DB, fallbackDays int, source string) (time.Time, error) {
 	if r.URL.Query().Get("range") == "all" {
-		first, err := db.FirstEventAt(r.Context())
+		first, err := db.FirstEventAtBySource(r.Context(), source)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -58,12 +71,16 @@ func sinceParam(r *http.Request, db *store.DB, fallbackDays int) (time.Time, err
 	return time.Now().UTC().AddDate(0, 0, -days), nil
 }
 
-func seriesSinceParam(r *http.Request, db *store.DB, fallbackDays int) (time.Time, error) {
+func seriesSinceParam(r *http.Request, db *store.DB, fallbackDays int, source string) (time.Time, error) {
 	if r.URL.Query().Get("range") == "all" {
-		return sinceParam(r, db, fallbackDays)
+		return sinceParam(r, db, fallbackDays, source)
 	}
 	days := intParam(r, "days", fallbackDays)
 	return startOfUTCDay(time.Now().UTC()).AddDate(0, 0, -(days - 1)), nil
+}
+
+func sourceParam(r *http.Request) string {
+	return store.NormalizeSource(r.URL.Query().Get("source"))
 }
 
 func intParam(r *http.Request, key string, fallback int) int {

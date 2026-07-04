@@ -29,7 +29,7 @@ func main() {
 func run() error {
 	var (
 		addr   = flag.String("addr", envOrDefault("CUA_ADDR", ":4318"), "HTTP listen address")
-		dbPath = flag.String("db", envOrDefault("CUA_DB", "data/codex-usage.sqlite"), "SQLite database path")
+		dbPath = flag.String("db", envOrDefault("CUA_DB", "data/ai-tool-analytics.sqlite"), "SQLite database path")
 	)
 	flag.Parse()
 

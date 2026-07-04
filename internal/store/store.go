@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -16,6 +17,7 @@ type DB struct {
 
 type Event struct {
 	Timestamp             time.Time
+	Source                string
 	ConversationID        string
 	Model                 string
 	Name                  string
@@ -24,6 +26,7 @@ type Event struct {
 	DurationMS            *int64
 	InputTokens           int64
 	CachedInputTokens     int64
+	CacheCreationTokens   int64
 	OutputTokens          int64
 	ReasoningOutputTokens int64
 	TotalTokens           int64
@@ -38,6 +41,7 @@ type Summary struct {
 	AvgDurationMS         float64 `json:"avgDurationMs"`
 	InputTokens           int64   `json:"inputTokens"`
 	CachedInputTokens     int64   `json:"cachedInputTokens"`
+	CacheCreationTokens   int64   `json:"cacheCreationTokens"`
 	OutputTokens          int64   `json:"outputTokens"`
 	ReasoningOutputTokens int64   `json:"reasoningOutputTokens"`
 	TotalTokens           int64   `json:"totalTokens"`
@@ -51,6 +55,7 @@ type SeriesPoint struct {
 	Failures              int64   `json:"failures"`
 	InputTokens           int64   `json:"inputTokens"`
 	CachedInputTokens     int64   `json:"cachedInputTokens"`
+	CacheCreationTokens   int64   `json:"cacheCreationTokens"`
 	OutputTokens          int64   `json:"outputTokens"`
 	ReasoningOutputTokens int64   `json:"reasoningOutputTokens"`
 	TotalTokens           int64   `json:"totalTokens"`
@@ -58,8 +63,17 @@ type SeriesPoint struct {
 }
 
 type BreakdownRow struct {
+	Source           string  `json:"source"`
 	Model            string  `json:"model"`
 	Events           int64   `json:"events"`
+	TotalTokens      int64   `json:"totalTokens"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+}
+
+type SourceBreakdownRow struct {
+	Source           string  `json:"source"`
+	Events           int64   `json:"events"`
+	Requests         int64   `json:"requests"`
 	TotalTokens      int64   `json:"totalTokens"`
 	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
 }
@@ -92,6 +106,7 @@ func (d *DB) migrate(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS telemetry_events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts TEXT NOT NULL,
+	source TEXT NOT NULL DEFAULT 'codex',
 	conversation_id TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
 	name TEXT NOT NULL,
@@ -100,6 +115,7 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
 	duration_ms INTEGER,
 	input_tokens INTEGER NOT NULL DEFAULT 0,
 	cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
 	output_tokens INTEGER NOT NULL DEFAULT 0,
 	reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
 	total_tokens INTEGER NOT NULL DEFAULT 0,
@@ -107,12 +123,16 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
 	dropped_content_fields INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_telemetry_events_ts ON telemetry_events(ts);
+CREATE INDEX IF NOT EXISTS idx_telemetry_events_source ON telemetry_events(source);
 CREATE INDEX IF NOT EXISTS idx_telemetry_events_model ON telemetry_events(model);
 CREATE INDEX IF NOT EXISTS idx_telemetry_events_name ON telemetry_events(name);
 `)
 	if err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
+	_, _ = d.db.ExecContext(ctx, `ALTER TABLE telemetry_events ADD COLUMN source TEXT NOT NULL DEFAULT 'codex'`)
+	_, _ = d.db.ExecContext(ctx, `ALTER TABLE telemetry_events ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_telemetry_events_source ON telemetry_events(source)`)
 	return nil
 }
 
@@ -126,10 +146,10 @@ func (d *DB) InsertEvents(ctx context.Context, events []Event) error {
 	}
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO telemetry_events (
-	ts, conversation_id, model, name, kind, success, duration_ms,
-	input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens, total_tokens,
+	ts, source, conversation_id, model, name, kind, success, duration_ms,
+	input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
 	estimated_cost_usd, dropped_content_fields
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -151,6 +171,7 @@ INSERT INTO telemetry_events (
 		}
 		_, err := stmt.ExecContext(ctx,
 			event.Timestamp.UTC().Format(time.RFC3339Nano),
+			defaultSource(event.Source),
 			event.ConversationID,
 			event.Model,
 			event.Name,
@@ -159,6 +180,7 @@ INSERT INTO telemetry_events (
 			duration,
 			event.InputTokens,
 			event.CachedInputTokens,
+			event.CacheCreationTokens,
 			event.OutputTokens,
 			event.ReasoningOutputTokens,
 			event.TotalTokens,
@@ -174,31 +196,42 @@ INSERT INTO telemetry_events (
 }
 
 func (d *DB) Summary(ctx context.Context, since time.Time) (Summary, error) {
+	return d.SummaryBySource(ctx, since, "")
+}
+
+func (d *DB) SummaryBySource(ctx context.Context, since time.Time, source string) (Summary, error) {
 	var out Summary
+	filter, args := sourceFilter(since.UTC().Format(time.RFC3339Nano), source)
 	err := d.db.QueryRowContext(ctx, `
 SELECT
 	COUNT(*),
-	COALESCE(SUM(CASE WHEN name = 'codex.api_request' THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN name IN ('codex.api_request', 'claude_code.api_request') THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0),
 	COALESCE(AVG(duration_ms), 0),
 	COALESCE(SUM(input_tokens), 0),
 	COALESCE(SUM(cached_input_tokens), 0),
+	COALESCE(SUM(cache_creation_tokens), 0),
 	COALESCE(SUM(output_tokens), 0),
 	COALESCE(SUM(reasoning_output_tokens), 0),
 	COALESCE(SUM(total_tokens), 0),
 	COALESCE(SUM(estimated_cost_usd), 0)
 FROM telemetry_events
-WHERE ts >= ?`, since.UTC().Format(time.RFC3339Nano)).Scan(
+WHERE `+filter, args...).Scan(
 		&out.Events, &out.Requests, &out.Failures, &out.AvgDurationMS,
-		&out.InputTokens, &out.CachedInputTokens, &out.OutputTokens,
+		&out.InputTokens, &out.CachedInputTokens, &out.CacheCreationTokens, &out.OutputTokens,
 		&out.ReasoningOutputTokens, &out.TotalTokens, &out.EstimatedCostUSD,
 	)
 	return out, err
 }
 
 func (d *DB) FirstEventAt(ctx context.Context) (*time.Time, error) {
+	return d.FirstEventAtBySource(ctx, "")
+}
+
+func (d *DB) FirstEventAtBySource(ctx context.Context, source string) (*time.Time, error) {
 	var first sql.NullString
-	err := d.db.QueryRowContext(ctx, `SELECT MIN(ts) FROM telemetry_events`).Scan(&first)
+	filter, args := sourceFilter("", source)
+	err := d.db.QueryRowContext(ctx, `SELECT MIN(ts) FROM telemetry_events WHERE `+filter, args...).Scan(&first)
 	if err != nil {
 		return nil, err
 	}
@@ -213,23 +246,29 @@ func (d *DB) FirstEventAt(ctx context.Context) (*time.Time, error) {
 }
 
 func (d *DB) Series(ctx context.Context, since time.Time) ([]SeriesPoint, error) {
+	return d.SeriesBySource(ctx, since, "")
+}
+
+func (d *DB) SeriesBySource(ctx context.Context, since time.Time, source string) ([]SeriesPoint, error) {
 	since = startOfUTCDay(since)
+	filter, args := sourceFilter(since.UTC().Format(time.RFC3339Nano), source)
 	rows, err := d.db.QueryContext(ctx, `
 SELECT
 	strftime('%Y-%m-%d', ts),
 	COUNT(*),
-	COALESCE(SUM(CASE WHEN name = 'codex.api_request' THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN name IN ('codex.api_request', 'claude_code.api_request') THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(input_tokens), 0),
 	COALESCE(SUM(cached_input_tokens), 0),
+	COALESCE(SUM(cache_creation_tokens), 0),
 	COALESCE(SUM(output_tokens), 0),
 	COALESCE(SUM(reasoning_output_tokens), 0),
 	COALESCE(SUM(total_tokens), 0),
 	COALESCE(SUM(estimated_cost_usd), 0)
 FROM telemetry_events
-WHERE ts >= ?
+WHERE `+filter+`
 GROUP BY 1
-ORDER BY 1`, since.UTC().Format(time.RFC3339Nano))
+ORDER BY 1`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +279,7 @@ ORDER BY 1`, since.UTC().Format(time.RFC3339Nano))
 		var point SeriesPoint
 		if err := rows.Scan(
 			&point.Bucket, &point.Events, &point.Requests, &point.Failures,
-			&point.InputTokens, &point.CachedInputTokens, &point.OutputTokens,
+			&point.InputTokens, &point.CachedInputTokens, &point.CacheCreationTokens, &point.OutputTokens,
 			&point.ReasoningOutputTokens, &point.TotalTokens, &point.EstimatedCostUSD,
 		); err != nil {
 			return nil, err
@@ -270,12 +309,17 @@ func startOfUTCDay(t time.Time) time.Time {
 }
 
 func (d *DB) ModelBreakdown(ctx context.Context, since time.Time) ([]BreakdownRow, error) {
+	return d.ModelBreakdownBySource(ctx, since, "")
+}
+
+func (d *DB) ModelBreakdownBySource(ctx context.Context, since time.Time, source string) ([]BreakdownRow, error) {
+	filter, args := sourceFilter(since.UTC().Format(time.RFC3339Nano), source)
 	rows, err := d.db.QueryContext(ctx, `
-SELECT COALESCE(NULLIF(model, ''), 'unknown'), COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(estimated_cost_usd), 0)
+SELECT COALESCE(NULLIF(source, ''), 'unknown'), COALESCE(NULLIF(model, ''), 'unknown'), COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(estimated_cost_usd), 0)
 FROM telemetry_events
-WHERE ts >= ?
-GROUP BY 1
-ORDER BY 4 DESC, 3 DESC`, since.UTC().Format(time.RFC3339Nano))
+WHERE `+filter+`
+GROUP BY 1, 2
+ORDER BY 5 DESC, 4 DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +328,40 @@ ORDER BY 4 DESC, 3 DESC`, since.UTC().Format(time.RFC3339Nano))
 	out := make([]BreakdownRow, 0)
 	for rows.Next() {
 		var row BreakdownRow
-		if err := rows.Scan(&row.Model, &row.Events, &row.TotalTokens, &row.EstimatedCostUSD); err != nil {
+		if err := rows.Scan(&row.Source, &row.Model, &row.Events, &row.TotalTokens, &row.EstimatedCostUSD); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) SourceBreakdown(ctx context.Context, since time.Time) ([]SourceBreakdownRow, error) {
+	return d.SourceBreakdownBySource(ctx, since, "")
+}
+
+func (d *DB) SourceBreakdownBySource(ctx context.Context, since time.Time, source string) ([]SourceBreakdownRow, error) {
+	filter, args := sourceFilter(since.UTC().Format(time.RFC3339Nano), source)
+	rows, err := d.db.QueryContext(ctx, `
+SELECT
+	COALESCE(NULLIF(source, ''), 'unknown'),
+	COUNT(*),
+	COALESCE(SUM(CASE WHEN name IN ('codex.api_request', 'claude_code.api_request') THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(total_tokens), 0),
+	COALESCE(SUM(estimated_cost_usd), 0)
+FROM telemetry_events
+WHERE `+filter+`
+GROUP BY 1
+ORDER BY 5 DESC, 4 DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]SourceBreakdownRow, 0)
+	for rows.Next() {
+		var row SourceBreakdownRow
+		if err := rows.Scan(&row.Source, &row.Events, &row.Requests, &row.TotalTokens, &row.EstimatedCostUSD); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
@@ -318,4 +395,41 @@ func (d *DB) Count(ctx context.Context) (int64, error) {
 		return 0, nil
 	}
 	return count, err
+}
+
+func defaultSource(source string) string {
+	if source == "" {
+		return "codex"
+	}
+	return source
+}
+
+func sourceFilter(since string, source string) (string, []any) {
+	parts := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if since != "" {
+		parts = append(parts, "ts >= ?")
+		args = append(args, since)
+	}
+	if normalized := NormalizeSource(source); normalized != "" {
+		parts = append(parts, "source = ?")
+		args = append(args, normalized)
+	}
+	if len(parts) == 0 {
+		return "1 = 1", args
+	}
+	return strings.Join(parts, " AND "), args
+}
+
+func NormalizeSource(source string) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "", "all":
+		return ""
+	case "codex":
+		return "codex"
+	case "claude", "claude_code", "claude-code":
+		return "claude-code"
+	default:
+		return ""
+	}
 }
