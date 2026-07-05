@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #111318;
+      --line: #dfe4ee;
+      --accent: #2563eb;
+      --secondary: #7c3aed;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111318;
+        --fg: #f8fafc;
+        --line: #303847;
+        --accent: #60a5fa;
+        --secondary: #a78bfa;
+      }
+    }
+  </style>
+  <rect width="64" height="64" rx="12" fill="var(--bg)" />
+  <rect x="2" y="2" width="60" height="60" rx="11" fill="none" stroke="var(--line)" stroke-width="2" />
+  <rect x="15" y="33" width="8" height="17" rx="2" fill="var(--accent)" />
+  <rect x="28" y="21" width="8" height="29" rx="2" fill="var(--secondary)" />
+  <rect x="41" y="27" width="8" height="23" rx="2" fill="var(--accent)" />
+  <path d="M14 24l12 6 10-12 14 8" fill="none" stroke="var(--fg)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

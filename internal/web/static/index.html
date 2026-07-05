@@ -4,17 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Usage Dashboard</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main>
-      <header class="topbar">
-        <div>
+    <main class="shell">
+      <header class="app-header">
+        <div class="identity">
+          <p class="eyebrow">Local OpenTelemetry</p>
           <h1>AI Usage Dashboard</h1>
-          <p>Local OTel telemetry for Codex and Claude Code. Costs are estimates, not billing data.</p>
+          <p class="lede">Track Codex and Claude Code usage, token flow, and estimated cost from opt-in telemetry.</p>
         </div>
-        <div class="controls">
-          <label>
+        <form class="toolbar" aria-label="Dashboard filters">
+          <label class="field">
             <span>Range</span>
             <select id="range">
               <option value="7" selected>Last 7 days</option>
@@ -23,7 +25,7 @@
               <option value="all">All time</option>
             </select>
           </label>
-          <label>
+          <label class="field">
             <span>Source</span>
             <select id="source">
               <option value="all" selected>All sources</option>
@@ -31,67 +33,122 @@
               <option value="claude-code">Claude Code</option>
             </select>
           </label>
-          <button id="refresh" type="button">Refresh</button>
-        </div>
+          <button id="refresh" class="refresh-button" type="button" title="Refresh dashboard">
+            Refresh
+          </button>
+        </form>
       </header>
 
-      <section class="grid metrics" aria-label="usage summary">
-        <article class="cost-card">
-          <span>Estimated cost <small id="costRange">Last 7 days</small></span>
+      <section class="status-strip" aria-label="dashboard status">
+        <div class="status-group">
+          <span id="healthState" class="status-pill">Waiting</span>
+          <span id="lastUpdated">Not refreshed yet</span>
+        </div>
+        <p>
+          Costs are estimates from telemetry and local pricing references:
+          <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noreferrer">OpenAI</a>
+          and
+          <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noreferrer">Anthropic</a>.
+          They are not billing data.
+        </p>
+      </section>
+
+      <section class="metric-grid" aria-label="usage summary">
+        <article class="metric-card metric-card-primary">
+          <span>Estimated cost <small class="range-label">Last 7 days</small></span>
           <strong id="cost">$0.0000</strong>
-          <p class="pricing-note">
-            Estimated from telemetry and local pricing references:
-            <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noreferrer">OpenAI</a>
-            and
-            <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noreferrer">Anthropic</a>.
-            Not billing data.
-          </p>
         </article>
-        <article><span>Total tokens <small id="tokensRange">Last 7 days</small></span><strong id="tokens">0</strong></article>
-        <article><span>Requests <small id="requestsRange">Last 7 days</small></span><strong id="requests">0</strong></article>
-        <article><span>Failures <small id="failuresRange">Last 7 days</small></span><strong id="failures">0</strong></article>
-      </section>
-
-      <section class="grid detail">
-        <article class="panel">
-          <h2>Tokens by Day</h2>
-          <div id="chart" class="chart"></div>
+        <article class="metric-card">
+          <span>Total tokens <small class="range-label">Last 7 days</small></span>
+          <strong id="tokens">0</strong>
         </article>
-        <article class="panel">
-          <h2>Model Breakdown</h2>
-          <table>
-            <thead>
-              <tr><th>Source</th><th>Model</th><th>Tokens</th><th>Cost</th></tr>
-            </thead>
-            <tbody id="models"></tbody>
-          </table>
+        <article class="metric-card">
+          <span>Requests <small class="range-label">Last 7 days</small></span>
+          <strong id="requests">0</strong>
         </article>
-        <article class="panel">
-          <h2>Source Breakdown</h2>
-          <table>
-            <thead>
-              <tr><th>Source</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr>
-            </thead>
-            <tbody id="sources"></tbody>
-          </table>
+        <article class="metric-card">
+          <span>Failure rate <small id="failures">0 failures</small></span>
+          <strong id="failureRate">0%</strong>
+        </article>
+        <article class="metric-card">
+          <span>Avg duration <small class="range-label">Last 7 days</small></span>
+          <strong id="avgDuration">0 ms</strong>
+        </article>
+        <article class="metric-card">
+          <span>Cost / request <small class="range-label">Last 7 days</small></span>
+          <strong id="costPerRequest">$0.0000</strong>
         </article>
       </section>
 
-      <section class="grid metrics secondary" aria-label="token details">
-        <article><span>Input</span><strong id="input">0</strong></article>
-        <article><span>Cached input</span><strong id="cached">0</strong></article>
-        <article><span>Cache creation</span><strong id="cacheCreation">0</strong></article>
-        <article><span>Output</span><strong id="output">0</strong></article>
-        <article><span>Reasoning</span><strong id="reasoning">0</strong></article>
-      </section>
+      <section class="dashboard-grid">
+        <article class="panel chart-panel">
+          <header class="panel-heading">
+            <div>
+              <h2>Daily Usage</h2>
+              <p id="chartSubtitle">Token volume by day</p>
+            </div>
+            <span id="peakDay" class="panel-kicker">Peak: none</span>
+          </header>
+          <div id="chart" class="chart" aria-label="Daily token chart"></div>
+        </article>
 
-      <section class="panel health">
-        <h2>Ingestion Health</h2>
-        <dl>
-          <div><dt>Last event</dt><dd id="lastEvent">Never</dd></div>
-          <div><dt>Accepted events</dt><dd id="accepted">0</dd></div>
-          <div><dt>Dropped content fields</dt><dd id="dropped">0</dd></div>
-        </dl>
+        <article class="panel">
+          <header class="panel-heading">
+            <div>
+              <h2>Source Breakdown</h2>
+              <p>Requests, tokens, and estimated cost by source.</p>
+            </div>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Source</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr>
+              </thead>
+              <tbody id="sources"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel model-panel">
+          <header class="panel-heading">
+            <div>
+              <h2>Model Breakdown</h2>
+              <p>Highest-cost models appear first.</p>
+            </div>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Source</th><th>Model</th><th>Tokens</th><th>Cost</th></tr>
+              </thead>
+              <tbody id="models"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <header class="panel-heading">
+            <div>
+              <h2>Token Mix</h2>
+              <p>Share of token types in the selected range.</p>
+            </div>
+          </header>
+          <div id="tokenMix" class="token-mix"></div>
+        </article>
+
+        <article class="panel health-panel">
+          <header class="panel-heading">
+            <div>
+              <h2>Ingestion Health</h2>
+              <p>Current state of the local telemetry receiver.</p>
+            </div>
+          </header>
+          <dl class="health-list">
+            <div><dt>Last event</dt><dd id="lastEvent">Never</dd></div>
+            <div><dt>Accepted events</dt><dd id="accepted">0</dd></div>
+            <div><dt>Dropped content fields</dt><dd id="dropped">0</dd></div>
+          </dl>
+        </article>
       </section>
     </main>
     <script src="/app.js"></script>
