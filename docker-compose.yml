@@ -8,9 +8,9 @@ services:
     volumes:
       - ai-usage-dashboard-data:/data
     environment:
-      CUA_ADDR: ":4318"
-      CUA_DB: "/data/ai-usage-dashboard.sqlite"
-      CUA_DEBUG_OTEL_KEYS: "${CUA_DEBUG_OTEL_KEYS:-}"
+      AUD_ADDR: ":4318"
+      AUD_DB: "/data/ai-usage-dashboard.sqlite"
+      AUD_DEBUG_OTEL_KEYS: "${AUD_DEBUG_OTEL_KEYS:-}"
 
 volumes:
   ai-usage-dashboard-data:

@@ -679,7 +679,7 @@ func countContentFields(values map[string]any) int {
 }
 
 func logDiagnosticFields(name, kind string, values map[string]any, input, cached, output, reasoning, total int64) {
-	if os.Getenv("CUA_DEBUG_OTEL_KEYS") == "" {
+	if os.Getenv("AUD_DEBUG_OTEL_KEYS") == "" {
 		return
 	}
 	if !strings.Contains(name, "sse") && kind != "response.completed" {

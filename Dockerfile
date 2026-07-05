@@ -15,8 +15,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /out/ai-usage-dashboard /app/ai-usage-dashboard
 VOLUME ["/data"]
-ENV CUA_ADDR=:4318
-ENV CUA_DB=/data/ai-usage-dashboard.sqlite
+ENV AUD_ADDR=:4318
+ENV AUD_DB=/data/ai-usage-dashboard.sqlite
 EXPOSE 4318
 
 ENTRYPOINT ["/app/ai-usage-dashboard"]

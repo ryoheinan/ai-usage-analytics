@@ -69,9 +69,9 @@ go run ./cmd/ai-usage-dashboard
 
 Environment variables:
 
-- `CUA_ADDR`: listen address, default `:4318`
-- `CUA_DB`: SQLite path, default `data/ai-usage-dashboard.sqlite`
-- `CUA_DEBUG_OTEL_KEYS`: when set, logs selected OTel field keys for diagnostics without storing raw payloads
+- `AUD_ADDR`: listen address, default `:4318`
+- `AUD_DB`: SQLite path, default `data/ai-usage-dashboard.sqlite`
+- `AUD_DEBUG_OTEL_KEYS`: when set, logs selected OTel field keys for diagnostics without storing raw payloads
 
 ## Verification
 
