@@ -34,7 +34,8 @@ body {
 }
 
 button,
-select {
+select,
+input {
   font: inherit;
 }
 
@@ -97,7 +98,7 @@ h1 {
 
 .toolbar {
   display: grid;
-  grid-template-columns: repeat(2, minmax(150px, 1fr)) auto;
+  grid-template-columns: repeat(2, minmax(150px, 1fr)) auto auto;
   gap: 10px;
   align-items: end;
   padding: 10px;
@@ -121,7 +122,9 @@ dt {
 }
 
 select,
-.refresh-button {
+input[type="file"],
+.refresh-button,
+.secondary-button {
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -134,8 +137,14 @@ select {
   padding: 8px 34px 8px 10px;
 }
 
-.refresh-button {
+.refresh-button,
+.secondary-button {
   padding: 8px 14px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.refresh-button {
   background: var(--accent);
   border-color: var(--accent);
   color: #ffffff;
@@ -149,6 +158,25 @@ select {
 }
 
 .refresh-button:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  color: var(--accent-strong);
+  font-weight: 750;
+}
+
+.secondary-button:hover {
+  border-color: #bfdbfe;
+  background: var(--accent-soft);
+}
+
+.secondary-button:disabled {
   cursor: progress;
   opacity: 0.72;
 }
@@ -283,9 +311,17 @@ select {
   margin-bottom: 14px;
 }
 
-h2 {
+h2,
+h3 {
   font-size: 16px;
   line-height: 1.25;
+  font-weight: 780;
+}
+
+h3 {
+  margin: 0 0 9px;
+  color: var(--fg);
+  font-size: 13px;
   font-weight: 780;
 }
 
@@ -524,6 +560,173 @@ tr:last-child td {
   border-top: 1px solid var(--line-soft);
 }
 
+.portability-actions,
+.import-form {
+  display: flex;
+  gap: 8px;
+}
+
+.portability-actions {
+  flex-wrap: wrap;
+}
+
+.dialog-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.dialog-section {
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.section-copy {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.import-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.portability-dialog .secondary-button,
+.file-picker,
+.mode-field select {
+  min-height: 34px;
+}
+
+.portability-dialog .secondary-button,
+.toolbar-action {
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.portability-actions .secondary-button {
+  min-width: 82px;
+}
+
+.file-picker {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 5px;
+  background: var(--line-soft);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.file-name {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-field {
+  gap: 4px;
+  min-width: 116px;
+}
+
+.mode-field select {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.import-status {
+  margin-top: 10px;
+  min-height: 18px;
+  color: var(--quiet);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.portability-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 32px));
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  box-shadow: var(--shadow);
+}
+
+.portability-dialog::backdrop {
+  background: rgba(17, 19, 24, 0.34);
+}
+
+.dialog-close-form {
+  display: flex;
+  justify-content: end;
+}
+
+.dialog-close {
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.dialog-heading {
+  margin: 4px 0 16px;
+}
+
+.dialog-heading p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.import-status.error {
+  color: var(--coral);
+}
+
+.import-status.loading {
+  color: var(--amber);
+}
+
 dd {
   margin: 4px 0 0;
   color: var(--fg);
@@ -559,7 +762,8 @@ dd {
 
   .app-header,
   .status-strip,
-  .toolbar {
+  .toolbar,
+  .import-form {
     grid-template-columns: 1fr;
   }
 

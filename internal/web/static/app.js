@@ -9,6 +9,15 @@ async function getJSON(url) {
   return res.json();
 }
 
+async function readAPIError(res) {
+  try {
+    const payload = await res.json();
+    return payload.error || res.statusText;
+  } catch {
+    return res.statusText;
+  }
+}
+
 function byId(id) {
   return document.getElementById(id);
 }
@@ -42,6 +51,26 @@ function selectedFilters() {
 
 function apiPath(path, query) {
   return query ? `${path}?${query}` : path;
+}
+
+function updateExportLinks(filters) {
+  byId("exportJson").href = apiPath("/api/export.json", filters.query);
+  byId("exportCsv").href = apiPath("/api/export.csv", filters.query);
+}
+
+function openPortabilityDialog() {
+  const dialog = byId("portabilityDialog");
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
+function closeDialogOnBackdrop(event) {
+  if (event.target === event.currentTarget) {
+    event.currentTarget.close();
+  }
 }
 
 function sourceLabel(source) {
@@ -249,8 +278,64 @@ function renderHealth(health) {
   setStatus(health.acceptedEvents > 0 ? "" : "loading", health.acceptedEvents > 0 ? "Receiving" : "Waiting");
 }
 
+function setImportStatus(kind, message) {
+  const status = byId("importStatus");
+  status.className = `import-status ${kind}`;
+  status.textContent = message;
+}
+
+function updateImportFileName() {
+  const fileInput = byId("importFile");
+  const file = fileInput.files && fileInput.files[0];
+  text("importFileName", file ? file.name : "No file selected");
+}
+
+async function importData(event) {
+  event.preventDefault();
+  const fileInput = byId("importFile");
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) {
+    setImportStatus("error", "Choose a JSON export file first.");
+    return;
+  }
+
+  const mode = byId("importMode").value;
+  if (mode === "replace" && !window.confirm("Replace all stored telemetry metadata with this import file?")) {
+    return;
+  }
+
+  const form = new FormData();
+  form.set("mode", mode);
+  form.set("file", file);
+
+  const button = byId("importButton");
+  button.disabled = true;
+  button.textContent = "Importing";
+  setImportStatus("loading", "Importing data");
+  try {
+    const res = await fetch("/api/import", { method: "POST", body: form });
+    if (!res.ok) throw new Error(await readAPIError(res));
+    const result = await res.json();
+    const replaced = result.replaced > 0 ? `, replaced ${fmt.format(result.replaced)}` : "";
+    setImportStatus(
+      "",
+      `Imported ${fmt.format(result.inserted)} events, skipped ${fmt.format(result.skipped)} duplicates${replaced}.`,
+    );
+    fileInput.value = "";
+    updateImportFileName();
+    refreshDashboard();
+  } catch (err) {
+    console.error(err);
+    setImportStatus("error", err instanceof Error ? err.message : "Import failed");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Import";
+  }
+}
+
 async function refresh() {
   const filters = selectedFilters();
+  updateExportLinks(filters);
   setRangeLabels(filters.label);
   const refreshButton = byId("refresh");
   refreshButton.disabled = true;
@@ -296,5 +381,9 @@ function refreshWhenVisible() {
 byId("refresh").addEventListener("click", refreshDashboard);
 byId("range").addEventListener("change", refreshDashboard);
 byId("source").addEventListener("change", refreshDashboard);
+byId("openPortability").addEventListener("click", openPortabilityDialog);
+byId("portabilityDialog").addEventListener("click", closeDialogOnBackdrop);
+byId("importFile").addEventListener("change", updateImportFileName);
+byId("importForm").addEventListener("submit", importData);
 document.addEventListener("visibilitychange", refreshWhenVisible);
 refreshDashboard();

@@ -36,6 +36,7 @@
           <button id="refresh" class="refresh-button" type="button" title="Refresh dashboard">
             Refresh
           </button>
+          <button id="openPortability" class="secondary-button toolbar-action" type="button">Export / Import</button>
         </form>
       </header>
 
@@ -149,7 +150,50 @@
             <div><dt>Dropped content fields</dt><dd id="dropped">0</dd></div>
           </dl>
         </article>
+
       </section>
+
+      <dialog id="portabilityDialog" class="portability-dialog" aria-labelledby="portabilityTitle">
+        <form method="dialog" class="dialog-close-form">
+          <button class="dialog-close" type="submit" aria-label="Close">Close</button>
+        </form>
+        <header class="dialog-heading">
+          <div>
+            <h2 id="portabilityTitle">Data Portability</h2>
+            <p>Export filtered metadata, or import a JSON backup into this local database.</p>
+          </div>
+        </header>
+        <div class="dialog-grid">
+          <section class="dialog-section" aria-label="Export data">
+            <h3>Export</h3>
+            <p class="section-copy">Uses the current dashboard range and source filters.</p>
+            <div class="portability-actions">
+              <a id="exportJson" class="secondary-button" href="/api/export.json" download>JSON</a>
+              <a id="exportCsv" class="secondary-button" href="/api/export.csv" download>CSV</a>
+            </div>
+          </section>
+          <section class="dialog-section" aria-label="Import data">
+            <h3>Import</h3>
+            <p class="section-copy">JSON imports can merge with existing events or replace all stored events.</p>
+            <form id="importForm" class="import-form">
+              <label class="file-picker">
+                <input id="importFile" class="visually-hidden" type="file" accept="application/json,.json" />
+                <span class="file-button">Choose JSON</span>
+                <span id="importFileName" class="file-name">No file selected</span>
+              </label>
+              <label class="field mode-field">
+                <span>Mode</span>
+                <select id="importMode">
+                  <option value="merge" selected>Merge</option>
+                  <option value="replace">Replace</option>
+                </select>
+              </label>
+              <button id="importButton" class="secondary-button import-button" type="submit">Import</button>
+            </form>
+            <p id="importStatus" class="import-status">No import yet</p>
+          </section>
+        </div>
+      </dialog>
     </main>
     <script src="/app.js"></script>
   </body>
