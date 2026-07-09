@@ -307,7 +307,7 @@ func (h *Handler) normalizeRecord(resourceAttrs map[string]any, record *logspb.L
 		OutputTokens:          output,
 		ReasoningOutputTokens: reasoning,
 		TotalTokens:           total,
-		EstimatedCostUSD:      estimatedCost(flat, h.prices, model, input, cached, output),
+		EstimatedCostUSD:      estimatedCost(flat, h.prices, model, input, cached, cacheCreation, output),
 		DroppedContentFields:  countContentFields(flat),
 	}
 }
@@ -457,11 +457,11 @@ func detectSource(values map[string]any, name string) string {
 	}
 }
 
-func estimatedCost(values map[string]any, prices pricing.Catalog, model string, input, cached, output int64) float64 {
+func estimatedCost(values map[string]any, prices pricing.Catalog, model string, input, cached, cacheCreation, output int64) float64 {
 	if cost := firstFloat64(values, "cost_usd", "estimated_cost_usd", "usage.cost_usd", "payload.cost_usd", "payload.usage.cost_usd"); cost > 0 {
 		return cost
 	}
-	return prices.EstimateUSD(model, input, cached, output)
+	return prices.EstimateUSD(model, input, cached, cacheCreation, output)
 }
 
 func flatten(values map[string]any) map[string]any {
